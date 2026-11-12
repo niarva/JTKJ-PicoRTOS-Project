@@ -20,12 +20,30 @@ enum state programState = IDLE;
 
 
 char line[INPUT_BUFFER_SIZE];
+char msg[INPUT_BUFFER_SIZE];
 char next_char;
 
 static volatile uint8_t button1_pressed, button2_pressed, recv_msg;
 static volatile uint8_t space_pressed;
 
+static const char *MORSE_TABLE[36] = {
+    ".-",   "-...", "-.-.", "-..",  ".",    "..-.", "--.",  "....", "..",
+    ".---", "-.-",  ".-..", "--",   "-.",   "---",  ".--.", "--.-", ".-.",
+    "...",  "-",    "..-",  "...-", ".--",  "-..-", "-.--", "--..",
+    "-----", ".----", "..---", "...--", "....-",
+    ".....", "-....", "--...", "---..", "----."
+};
 
+char morse_to_char(char *code) {
+    for (int i = 0; i < 36; i++) {
+        if (strcmp(MORSE_TABLE[i], code) == 0) {
+            if (i < 26) {
+                return 'A' + i;
+            }
+            return '0' + (i - 26);
+        }
+    }
+}
 
 static void btn_fxn(uint gpio, uint32_t eventMask) {
     if (gpio == BUTTON1) {
@@ -37,53 +55,79 @@ static void btn_fxn(uint gpio, uint32_t eventMask) {
     toggle_led();
 }
 
+void parse_input() {
+    size_t index = 0;
+    int c;
+    while (c != PICO_ERROR_TIMEOUT) {
+        c = getchar_timeout_us(0);
+
+        if (c == '\r') continue; // ignore CR, wait for LF if (ch == '\n') { line[len] = '\0';
+        if (c == '\n'){
+        // terminate and process the collected line
+            line[index] = '\0'; 
+            printf("__[RX]:\"%s\"__\n", line); //Print as debug in the output
+
+            break;
+        }
+        else if(index < INPUT_BUFFER_SIZE - 1){
+            line[index++] = (char)c;
+        }
+        else { //Overflow: print and restart the buffer with the new character. 
+            line[INPUT_BUFFER_SIZE - 1] = '\0';
+            printf("__[RX]:\"%s\"__\n", line);
+            index = 0; 
+            line[index++] = (char)c; 
+        }
+    }
+
+}
+
 static void receive_task(void *arg){
     (void)arg;
     
-    // size_t index = 0;
+    size_t big_array_size = 0;
     
     while (1){
-        //OPTION 1
-        // Using getchar_timeout_us https://www.raspberrypi.com/documentation/pico-sdk/runtime.html#group_pico_stdio_1ga5d24f1a711eba3e0084b6310f6478c1a
-        // take one char per time and store it in line array, until reeceived the \n
-        // The application should instead play a sound, or blink a LED. 
-        /*int c = getchar_timeout_us(0);
-        if (c != PICO_ERROR_TIMEOUT){// I have received a character
-            if (c == '\r') continue; // ignore CR, wait for LF if (ch == '\n') { line[len] = '\0';
-            if (c == '\n'){
-                // terminate and process the collected line
-                line[index] = '\0'; 
-                printf("__[RX]:\"%s\"__\n", line); //Print as debug in the output
-                index = 0;
-                vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
-            }
-            else if(index < INPUT_BUFFER_SIZE - 1){
-                line[index++] = (char)c;
-            }
-            else { //Overflow: print and restart the buffer with the new character. 
-                line[INPUT_BUFFER_SIZE - 1] = '\0';
-                printf("__[RX]:\"%s\"__\n", line);
-                index = 0; 
-                line[index++] = (char)c; 
+        parse_input();
+        for (int i = 0; i < sizeof(line) / sizeof(line[0]); i++){
+            if (line[i] == ' ' && line[i - 1] == ' '){
+                big_array_size++;
             }
         }
-        else {
-            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
-        }*/
-        //OPTION 2. Use the whole buffer. 
-        absolute_time_t next = delayed_by_us(get_absolute_time(), 500);//Wait 500 us
-        int read = stdio_get_until(line,INPUT_BUFFER_SIZE,next);
-        if (read == PICO_ERROR_TIMEOUT){
-            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
+
+        char *big_array[big_array_size];
+        size_t big_array_index = 0;
+        int line_size = sizeof(line) / sizeof(line[0]);
+        int last_word = 0;
+
+        for (int i = 0; i < line_size; i++){
+            if (line[i] == ' ' && line[i - 1] == ' '){
+                strncpy(big_array[big_array_index++], line, i - last_word);
+                last_word = i;
+            }
         }
-        else {
-            line[read] = '\0'; //Last character is 0
-            printf("__[RX] \"%s\"\n__", line);
-            //programState = RECV_MSG;
-            recv_msg = true;
-            vTaskDelay(pdMS_TO_TICKS(50));
+
+        int line_index = 0;
+
+        for (int i = 0; i < big_array_size; i++){
+            
+            char letter[6];
+            for (int j = 0; j < sizeof(big_array[i]) / sizeof(big_array[i][0]); j++) {
+                if (big_array[i][j] == '\0') {
+                    msg[line_index++] = ' ';
+                }
+                if (big_array[i][j] == ' ') {
+                    char m = morse_to_char(letter);
+                    msg[line_index++] = m;
+                } else {
+                    letter[j] = big_array[i][j];
+                }
+            }
         }
+        programState = RECV_MSG;
+        vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
     }
+
 
 
 }
@@ -140,17 +184,19 @@ void imu_task(void *pvParameters) {
 static void display_task(void *args) {
 
     init_display();
-    clear_display();
 
 
     while (true) {
-        if (recv_msg == true) {
+        if (programState == RECV_MSG) {
             clear_display();
-            write_text(line);
-            // programState = IDLE;
-            recv_msg = false;
-            vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+
+            int i = 0;
+            
+            write_text(msg);
+            programState = IDLE;
+            
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
     }
 
 }
