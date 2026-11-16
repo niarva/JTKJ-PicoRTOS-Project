@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <pico/stdlib.h>
 
@@ -11,20 +12,23 @@
 
 #include "tkjhat/sdk.h"
 
+#define ABS(x) (x > 0 ? x : -x)
+
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048 
 #define INPUT_BUFFER_SIZE 256
 
 //Add here necessary states
-enum state { IDLE=1, RECV_MSG=2, };
-enum state programState = IDLE;
+enum state { IDLE=1, RECV_MSG=2, DISPLAY=3, READ_IMU=4};
+volatile enum state programState = IDLE;
 
+void imu_fn();
 
 char line[INPUT_BUFFER_SIZE];
 char msg[INPUT_BUFFER_SIZE];
 char next_char;
 
-static volatile uint8_t button1_pressed, button2_pressed, recv_msg;
+static volatile uint8_t button1_pressed, button2_pressed;
 static volatile uint8_t space_pressed;
 size_t parse_index = 0;
 
@@ -48,9 +52,19 @@ char morse_to_char(char *code) {
     }
 }
 
+void toggle_state_fxn() {
+    if (programState == READ_IMU) {
+        programState = IDLE;
+    }
+    else if (programState == IDLE) {
+        programState = READ_IMU;
+    }
+}
+
 static void btn_fxn(uint gpio, uint32_t eventMask) {
     if (gpio == BUTTON1) {
         button1_pressed = true;
+        toggle_state_fxn();
     }
     else if (gpio == BUTTON2) {
         button2_pressed = true;
@@ -70,21 +84,21 @@ uint8_t parse_input() {
         if (c == '\r') continue; // ignore CR, wait for LF if (ch == '\n') { line[len] = '\0';
         if (c == '\n'){
         // terminate and process the collected line
-            printf("last index: %d", parse_index);
+
             line[parse_index] = '\0'; 
-            printf("__[RX]:\"%s\"__\n", line); //Print as debug in the output
+            // printf("__[RX]:\"%s\"__\n", line); //Print as debug in the output
             parse_index = 0;
-            programState = RECV_MSG;
+
             return true;
         }
         else if(parse_index < INPUT_BUFFER_SIZE - 1){
             // printf("%c", (char)c);
             line[parse_index++] = (char)c;
-            printf("Line index %d: %c\n", parse_index - 1, line[parse_index - 1]);
+
         }
         else { //Overflow: print and restart the buffer with the new character. 
             line[INPUT_BUFFER_SIZE - 1] = '\0';
-            printf("Overflow __[RX]:\"%s\"__\n", line);
+            // printf("Overflow __[RX]:\"%s\"__\n", line);
             parse_index = 0; 
             line[parse_index++] = (char)c; 
         }
@@ -106,7 +120,6 @@ static void receive_task(void *arg){
                 }
             }
 
-            printf("big array size: %d\n", big_array_size);
             char big_array[big_array_size][256];
             size_t big_array_index = 0;
             int line_size = sizeof(line) / sizeof(line[0]);
@@ -117,33 +130,30 @@ static void receive_task(void *arg){
                     char * word = strncpy(big_array[big_array_index++], line + last_word, i - last_word);
                     word[i - last_word] = '\0';
                     big_array[big_array_index - 1][i - last_word] = '\0';
-                    printf("copied: %s\n", word);
+
                     last_word = i + 1; 
                 }
             }
 
-            for (int i = 0; i < big_array_size; i++) {
-                printf("Word: %sx\n", big_array[i]);
-            }
+
 
             int line_index = 0;
             
 
             for (int i = 0; i < big_array_size; i++){
-                printf("For loopissa\n");
 
                 char *letter = strtok(big_array[i], " ");
                 while (letter != NULL) {
                     char m = morse_to_char(letter);
                     msg[line_index++] = m;
                     letter = strtok(NULL, " ");
-                    printf("%c ", m);
                 }
 
                 msg[line_index++] = ' ';
 
             }
-            printf("Message: %s\n", msg);
+
+            programState = RECV_MSG;
         }
         
         vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
@@ -153,36 +163,53 @@ static void receive_task(void *arg){
 
 }
 
+void idle_task(void *arg) {
 
-void imu_task(void *pvParameters) {
-    (void)pvParameters;
-
-    
-    float ax, ay, az, gx, gy, gz, t;
-    // Setting up the sensor. 
-    if (init_ICM42670() == 0) {
-        printf("ICM-42670P initialized successfully!\n");
-        if (ICM42670_start_with_default_values() != 0){
-            printf("ICM-42670P could not initialize accelerometer or gyroscope");
+    while (true) {
+        while (programState == IDLE) {
+            continue;
         }
-    } else {
-        printf("Failed to initialize ICM-42670P.\n");
+        if (programState == READ_IMU) {
+            imu_fn();
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
+}
 
-    while (1)
-    {
-        if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-            if (button1_pressed) {
-                if (ax > 0.90 && ax < 1.1) {
+float avg(float *arr, int size) {
+    float result = 0;
+    for (int i = 0; i < size; i++) {
+        result += arr[i];
+    }
+    return (result / size);
+}
+
+void imu_fn() {
+    
+    static float ax, ay, az, gx, gy, gz, t;
+    float gy_values[200];
+    float gx_values[200];
+    int counter = 0;
+
+    while (programState == READ_IMU) {
+        while (counter < 200) {
+            if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
+
+
+                gy_values[counter] = gy;
+                gx_values[counter] = gx;
+                counter++;
+                // printf("ax: %.2f, ay: %.2f\n", ax, ay);
+                /*if (gx > 1.0) {
                     printf("-");
                     buzzer_play_tone(440, 150);
-                } else if (ay > 0.90 && ay < 1.10) {
+                } else if (gy > 1.5) {
                     printf(".");
                     buzzer_play_tone(440, 150);
-                }
+                }*/
                 
                 button1_pressed = false;
-            } else if (button2_pressed) {
+            } /*else if (button2_pressed) {
                 if (space_pressed) {
                     printf(" \n");
                     space_pressed = false;
@@ -193,14 +220,32 @@ void imu_task(void *pvParameters) {
                     buzzer_play_tone(440, 150);
                 }
                 button2_pressed = false;
+            }*/ else {
+                printf("Failed to read imu data\n");
             }
-
-        } else {
-            printf("Failed to read imu data\n");
+            
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        float gy_avg = avg(gy_values, 200);
+        float gx_avg = avg(gx_values, 200);
+
+        //printf("gy: %.2f ", gy_avg);
+        // printf("gx: %.2f\n", gx_avg);
+        if (ABS(gy_avg) > 90) {
+            printf("-");
+            buzzer_play_tone(1000, 500);
+        } else if (ABS(gx_avg) > 90) {
+            printf(".");
+            buzzer_play_tone(1000, 250);
+        }
+
+        counter = 0;
+        for (int i = 0; i < 200; i++) {
+            gy_values[i] = 0;
+            gx_values[i] = 0;
+        }
     }
+
 
 }
 
@@ -216,16 +261,22 @@ static void display_task(void *args) {
 
             char* word = strtok(msg, " ");
             while (word != NULL) {
+                printf("%s ", word);
                 clear_display();
                 write_text(word);
+                word = strtok(NULL, " ");
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
             
 
+            for (int i = 0; i < INPUT_BUFFER_SIZE; i++) {
+                msg[i] = 0;
+                line[i] = 0;
+            }
             programState = IDLE;
             
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
 }
@@ -248,14 +299,23 @@ int main() {
     init_buzzer();
     buzzer_play_tone(440, 500);
 
-    TaskHandle_t imuTask, displayTaskHandle, hReceiveTask;
+    if (init_ICM42670() == 0) {
+        printf("ICM-42670P initialized successfully!\n");
+        if (ICM42670_start_with_default_values() != 0){
+            printf("ICM-42670P could not initialize accelerometer or gyroscope");
+        }
+    } else {
+        printf("Failed to initialize ICM-42670P.\n");
+    }
+
+    TaskHandle_t idleTaskHandle, displayTaskHandle, hReceiveTask;
     // Create the tasks with xTaskCreate
-    BaseType_t result = xTaskCreate(imu_task,       // (en) Task function
+    BaseType_t result = xTaskCreate(idle_task,       // (en) Task function
                 "IMU",              // (en) Name of the task 
                 DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
                 NULL,               // (en) Arguments of the task 
                 2,                  // (en) Priority of this task
-                &imuTask);    // (en) A handle to control the execution of this task
+                &idleTaskHandle);    // (en) A handle to control the execution of this task
 
     if(result != pdPASS) {
         printf("IMU Task creation failed\n");
