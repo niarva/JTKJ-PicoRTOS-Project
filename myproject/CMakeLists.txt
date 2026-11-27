@@ -112,10 +112,6 @@ add_subdirectory(examples/hello_serial_bidirectional_client)
 # If you add the headers in a different directory, you should use: target_include_directories
 add_executable(${MAIN_TARGET}
     src/main.c
-    src/morse.c
-    src/imu.c
-    src/receive.c
-    src/display.c
 )
 
 target_include_directories(

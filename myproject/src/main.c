@@ -8,50 +8,98 @@
 #include <task.h>
 
 #include "tkjhat/sdk.h"
-#include "imu.h"
 #include "main.h"
-#include "receive.h"
-#include "display.h"
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048 
-
-volatile enum state programState = IDLE;
+#define MSG_MAX_LEN 512
 
 volatile uint8_t button1_pressed, button2_pressed;
 volatile uint8_t space_pressed;
+volatile uint8_t send_msg = false;
+char msg[MSG_MAX_LEN];
+size_t msg_index = 0;
 
-
-void toggle_state_fxn() {
-    if (programState == READ_IMU) {
-        programState = IDLE;
-    }
-    else if (programState == IDLE) {
-        programState = READ_IMU;
-    }
-}
 
 void btn_fxn(uint gpio, uint32_t eventMask) {
     if (gpio == BUTTON1) {
         button1_pressed = true;
-        toggle_state_fxn();
     }
     else if (gpio == BUTTON2) {
         button2_pressed = true;
     }
 }
 
+void msg_push_char(char c) {
+    if (msg_index < MSG_MAX_LEN) {
+        msg[msg_index] = char;
+    }
+}
 
-void idle_task(void *arg) {
+void imu_task(void *pvParameters) {
+    (void)pvParameters;
 
+
+    float ax, ay, az, gx, gy, gz, t;
+    // Setting up the sensor. 
+    if (init_ICM42670() == 0) {
+        printf("ICM-42670P initialized successfully!\n");
+        if (ICM42670_start_with_default_values() != 0){
+            printf("ICM-42670P could not initialize accelerometer or gyroscope");
+        }
+    } else {
+        printf("Failed to initialize ICM-42670P.\n");
+    }
+
+    while (1)
+    {
+        if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
+            if (button1_pressed) {
+                if (ax > 0.90 && ax < 1.1) {
+                    msg_push_char('-');
+                    msg_index++;
+                    buzzer_play_tone(440, 150);
+                } else if (ay > 0.90 && ay < 1.10) {
+                    msg_push_char('.');
+                    msg_index++;
+                    buzzer_play_tone(440, 150);
+                }
+                buzzer_play_tone(440, 150);
+                
+                button1_pressed = false;
+            } else if (button2_pressed) {
+                if (space_pressed) {
+                    send_msg = true;
+                    space_pressed = false;
+                    buzzer_play_tone(550, 250);
+                } else {
+                    msg_push_char(' ');
+                    msg_index++;
+                    space_pressed = true;
+                    buzzer_play_tone(440, 150);
+                }
+                button2_pressed = false;
+            }
+
+        } else {
+            printf("Failed to read imu data\n");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+}
+
+void send_task() {
     while (true) {
-        while (programState == IDLE) {
-            continue;
+        if (send_msg) {
+            for (size_t i = 0; i < strlen(msg); i++) {
+                printf("%c ", msg[i]);
+            }
+            printf("  \n");
+            send_msg = false;
         }
-        if (programState == READ_IMU) {
-            imu_fn();
-        }
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -74,52 +122,29 @@ int main() {
     init_buzzer();
     buzzer_play_tone(440, 500);
 
-    init_display();
-
-    if (init_ICM42670() == 0) {
-        printf("ICM-42670P initialized successfully!\n");
-        if (ICM42670_start_with_default_values() != 0){
-            printf("ICM-42670P could not initialize accelerometer or gyroscope");
-        }
-    } else {
-        printf("Failed to initialize ICM-42670P.\n");
-    }
-
-    TaskHandle_t idleTaskHandle, displayTaskHandle, receiveTaskHandle;
+    TaskHandle_t imuTaskHandle sendTaskHandle;
     // Create the tasks with xTaskCreate
-    BaseType_t result = xTaskCreate(idle_task,       // (en) Task function
+    BaseType_t result = xTaskCreate(imu_task,       // (en) Task function
                 "IMU",              // (en) Name of the task 
                 DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
                 NULL,               // (en) Arguments of the task 
                 2,                  // (en) Priority of this task
-                &idleTaskHandle);    // (en) A handle to control the execution of this task
+                &imuTaskHandle);    // (en) A handle to control the execution of this task
 
     if(result != pdPASS) {
         printf("IMU Task creation failed\n");
         return 0;
     }
 
-    result = xTaskCreate(display_task,   // (en) Task function
-            "display",                   // (en) Name of the task 
+    result = xTaskCreate(send_task,   // (en) Task function
+            "send",                   // (en) Name of the task 
             1024,                    // (en) Size of the stack for this task (in words). Generally 1024 or 2048
             NULL,                    // (en) Arguments of the task 
             1,                       // (en) Priority of this task
-            &displayTaskHandle);     // (en) A handle to control the execution of this task
+            &sendTaskHandle);     // (en) A handle to control the execution of this task
 
     if(result != pdPASS) {
         printf("Display Task created failed\n");
-        return 0;
-    }
-
-    result = xTaskCreate(receive_task,  // (en) Task function
-            "receive",             // (en) Name of the task 
-            DEFAULT_STACK_SIZE,   // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-            NULL,                 // (en) Arguments of the task 
-            2,                    // (en) Priority of this task
-            &receiveTaskHandle);         // (en) A handle to control the execution of this task
-
-        if(result != pdPASS) {
-        printf("Receive Task created failed\n");
         return 0;
     }
 
