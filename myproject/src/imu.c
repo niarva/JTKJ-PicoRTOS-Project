@@ -7,7 +7,7 @@
 
 #include "tkjhat/sdk.h"
 #include "imu.h"
-#include "template.h"
+#include "main.h"
 
 // Threshold for registering input characters.
 const int GYRO_THRESHOLD = 200;

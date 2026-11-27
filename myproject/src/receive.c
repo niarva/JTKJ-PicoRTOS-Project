@@ -8,7 +8,7 @@
 
 #include "tkjhat/sdk.h"
 #include "morse.h"
-#include "template.h"
+#include "main.h"
 
 #include "receive.h"
 
@@ -36,7 +36,6 @@ uint8_t parse_input() {
             return true;
         }
         else if (parse_index < INPUT_BUFFER_SIZE - 1){
-            printf("%c", (char)c);
             if (parse_index == 0) {
                 write_text("Receiving");
             }

@@ -111,16 +111,16 @@ add_subdirectory(examples/hello_serial_bidirectional_client)
 # Add the source files to be compiled
 # If you add the headers in a different directory, you should use: target_include_directories
 add_executable(${MAIN_TARGET}
-    src/main.c
-    src/morse.c
-    src/imu.c
-    src/receive.c
-    src/display.c
+    myproject/src/main.c
+    myproject/src/morse.c
+    myproject/src/imu.c
+    myproject/src/receive.c
+    myproject/src/display.c
 )
 
 target_include_directories(
     ${MAIN_TARGET} PUBLIC
-    include
+    myproject/include
 )
 
 # Links. Add all libraries that application is using. It must at least use the pico_stdlib

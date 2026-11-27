@@ -6,7 +6,7 @@
 #include <queue.h>
 
 #include "tkjhat/sdk.h"
-#include "template.h"
+#include "main.h"
 #include "receive.h"
 
 extern char line[INPUT_BUFFER_SIZE];

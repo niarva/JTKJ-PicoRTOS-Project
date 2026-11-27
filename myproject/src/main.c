@@ -1,3 +1,9 @@
+/*
+    Arvi Ainali
+    Jaakko Harju
+    Eevertti Jauhiainen
+*/
+
 
 #include <stdio.h>
 #include <string.h>
