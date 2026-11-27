@@ -1,3 +1,8 @@
+/*
+    Arvi Ainali
+    Jaakko Harju
+    Eevertti Jauhiainen
+*/
 
 #include <stdio.h>
 #include <string.h>
@@ -14,13 +19,17 @@
 #define DEFAULT_STACK_SIZE 2048 
 #define MSG_MAX_LEN 512
 
+// Flags for button presses.
 volatile uint8_t button1_pressed, button2_pressed;
 volatile uint8_t space_pressed;
+
 volatile uint8_t send_msg = false;
+
+// Global string for storing message to be sent.
 char msg[MSG_MAX_LEN];
 size_t msg_index = 0;
 
-
+// Interrupt handler for buttons. Sets boolean flags on press.
 void btn_fxn(uint gpio, uint32_t eventMask) {
     if (gpio == BUTTON1) {
         button1_pressed = true;
@@ -30,12 +39,15 @@ void btn_fxn(uint gpio, uint32_t eventMask) {
     }
 }
 
+// Helper function for adding symbols to msg. Called by imu_task.
 void msg_push_char(char c) {
     if (msg_index < MSG_MAX_LEN) {
-        msg[msg_index] = char;
+        msg[msg_index] = c;
     }
 }
 
+
+// Reads device position and calls pushes detected symbols to msg on button press.
 void imu_task(void *pvParameters) {
     (void)pvParameters;
 
@@ -55,25 +67,30 @@ void imu_task(void *pvParameters) {
     {
         if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
             if (button1_pressed) {
-                if (ax > 0.90 && ax < 1.1) {
+                // If within 0.1 of position
+                if (ax < -0.90 && ax > -1.1) {
                     msg_push_char('-');
+                    space_pressed = false;
                     msg_index++;
                     buzzer_play_tone(440, 150);
-                } else if (ay > 0.90 && ay < 1.10) {
+                } else if (ay < -0.90 && ay > -1.10) {
                     msg_push_char('.');
+                    space_pressed = false;
                     msg_index++;
                     buzzer_play_tone(440, 150);
                 }
-                buzzer_play_tone(440, 150);
                 
                 button1_pressed = false;
             } else if (button2_pressed) {
+
+                // If button2 pressed twice in a row, message ready to be sent.
                 if (space_pressed) {
                     send_msg = true;
+                    msg_index = 0;
                     space_pressed = false;
                     buzzer_play_tone(550, 250);
                 } else {
-                    msg_push_char(' ');
+                    msg_push_char(' '); // Else add space.
                     msg_index++;
                     space_pressed = true;
                     buzzer_play_tone(440, 150);
@@ -92,9 +109,14 @@ void imu_task(void *pvParameters) {
 
 void send_task() {
     while (true) {
-        if (send_msg) {
+        if (send_msg) { // Flag set by imu_task.
             for (size_t i = 0; i < strlen(msg); i++) {
-                printf("%c ", msg[i]);
+                printf("%c", msg[i]);
+            }
+
+            // Clear msg.
+            for (size_t i = 0; i < strlen(msg); i++) {
+                msg[i] = 0;
             }
             printf("  \n");
             send_msg = false;
@@ -122,7 +144,7 @@ int main() {
     init_buzzer();
     buzzer_play_tone(440, 500);
 
-    TaskHandle_t imuTaskHandle sendTaskHandle;
+    TaskHandle_t imuTaskHandle, sendTaskHandle;
     // Create the tasks with xTaskCreate
     BaseType_t result = xTaskCreate(imu_task,       // (en) Task function
                 "IMU",              // (en) Name of the task 
